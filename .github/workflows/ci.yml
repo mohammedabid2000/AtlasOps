@@ -36,7 +36,7 @@ jobs:
           TEST_POSTGRES_URL: postgresql+psycopg://atlas:ci_ephemeral_test_only@localhost:5432/atlasops_test
       - name: Source vulnerability and secret scan
         run: docker run --rm -v "$PWD:/work:ro" aquasec/trivy:0.76.1 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 /work
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with: {terraform_version: '1.13.4'}
       - run: terraform -chdir=terraform/aws fmt -check
       - run: terraform -chdir=terraform/aws init -backend=false
