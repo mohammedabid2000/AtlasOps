@@ -1,0 +1,15 @@
+.env
+.secrets/
+.certs/
+.backups/
+.state/
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.tfstate*
+*.tfplan
+terraform/**/.terraform/
+terraform/**/terraform.tfvars
+ansible/inventory.ini
+compose.lock.yaml

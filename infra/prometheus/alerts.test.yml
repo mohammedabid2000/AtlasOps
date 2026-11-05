@@ -1,0 +1,18 @@
+rule_files: [alerts.yml]
+evaluation_interval: 15s
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'up{job="atlasops", instance="api:8000"}'
+        values: '0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: AtlasApiDown
+        exp_alerts: []
+      - eval_time: 75s
+        alertname: AtlasApiDown
+        exp_alerts:
+          - exp_labels: {job: atlasops, instance: "api:8000", severity: critical}
+            exp_annotations:
+              summary: "AtlasOps API cannot be scraped"
+              runbook: "docs/RUNBOOKS.md#api-unavailable"

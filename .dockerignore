@@ -1,0 +1,17 @@
+.git
+.env
+.secrets
+.certs
+.backups
+.state
+.venv
+__pycache__
+.pytest_cache
+docs
+tests
+terraform
+ansible
+k8s
+tools
+*.zip
+*.pdf

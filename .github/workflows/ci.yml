@@ -1,0 +1,118 @@
+name: Verify and package AtlasOps
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full_elk:
+        description: "Also run ELK integration on the runner"
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: atlasops-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_USER: atlas
+          POSTGRES_PASSWORD: ci_ephemeral_test_only
+          POSTGRES_DB: atlasops_test
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U atlas -d atlasops_test" --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12', cache: pip}
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q tests
+        env:
+          TEST_POSTGRES_URL: postgresql+psycopg://atlas:ci_ephemeral_test_only@localhost:5432/atlasops_test
+      - name: Source vulnerability and secret scan
+        run: docker run --rm -v "$PWD:/work:ro" aquasec/trivy:0.76.1 fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 /work
+      - uses: hashicorp/setup-terraform@v3
+        with: {terraform_version: '1.13.4'}
+      - run: terraform -chdir=terraform/aws fmt -check
+      - run: terraform -chdir=terraform/aws init -backend=false
+      - run: terraform -chdir=terraform/aws validate
+
+  stack:
+    needs: tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and exercise core stack with monitoring
+        run: make up
+      - name: Validate Prometheus and Nginx
+        run: |
+          bash scripts/compose.sh --profile monitoring run --rm --no-deps --entrypoint promtool prometheus check config /etc/prometheus/prometheus.yml
+          bash scripts/compose.sh --profile monitoring run --rm --no-deps -w /etc/prometheus --entrypoint promtool prometheus test rules alerts.test.yml
+          bash scripts/compose.sh exec -T nginx nginx -t
+          bash scripts/compose.sh exec -T waf nginx -t
+      - run: make rotate-key
+      - name: Restore a real database backup into an isolated database
+        run: |
+          make backup
+          dump=$(find .backups -name '*.dump' -print -quit)
+          make restore-test FILE="$dump"
+      - name: Alarm and recovery drill
+        run: make drill
+      - name: Optional full logging integration
+        if: github.event_name == 'workflow_dispatch' && inputs.full_elk
+        run: |
+          make full
+          make verify-full
+          make config-check
+      - name: Scan built image without exposing the Docker socket to the scanner
+        run: |
+          mkdir -p .state/scan
+          docker save atlasops-api:local -o .state/scan/api.tar
+          docker run --rm -v "$PWD/.state/scan:/scan:ro" aquasec/trivy:0.76.1 image --input /scan/api.tar --severity HIGH,CRITICAL --exit-code 1
+      - name: Preserve the exact tested image
+        run: |
+          docker save atlasops-api:local | gzip > /tmp/atlasops-tested-image.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tested-image
+          path: /tmp/atlasops-tested-image.tar.gz
+          retention-days: 2
+      - name: Print limited diagnostics on failure
+        if: failure()
+        run: |
+          bash scripts/compose.sh --profile monitoring --profile logging ps -a
+          bash scripts/compose.sh logs --tail=40 api nginx
+      - name: Clean up ephemeral runner stack
+        if: always()
+        run: bash scripts/compose.sh --profile monitoring --profile logging down -v
+
+  publish:
+    needs: [tests, stack]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {name: tested-image, path: /tmp}
+      - name: Publish the image tested by the stack job
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+        run: |
+          gzip -dc /tmp/atlasops-tested-image.tar.gz | docker load
+          image="ghcr.io/${GH_REPOSITORY,,}:${REVISION}"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
+          docker tag atlasops-api:local "$image"
+          docker push "$image"
+          printf 'Published %s\n' "$image" >> "$GITHUB_STEP_SUMMARY"
+# Deployment is an explicit host-side make deploy action, not an automatic SSH push.

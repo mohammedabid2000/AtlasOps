@@ -1,0 +1,9 @@
+route:
+  receiver: local-demo
+  group_by: [alertname]
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 1h
+receivers:
+  - name: local-demo
+# Alerts remain visible in the UI. No email, Slack, or external messages are sent.

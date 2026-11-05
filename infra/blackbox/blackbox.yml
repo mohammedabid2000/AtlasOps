@@ -1,0 +1,12 @@
+modules:
+  https_ready:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      valid_status_codes: [200]
+      preferred_ip_protocol: ip4
+      fail_if_not_ssl: true
+      tls_config:
+        ca_file: /etc/blackbox_exporter/ca.crt
+        server_name: localhost

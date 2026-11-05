@@ -1,0 +1,287 @@
+name: atlasops
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  init:
+    image: busybox:1.37
+    user: "0:0"
+    command: ["sh", "-ec", "mkdir -p /logs/app /logs/nginx /vault/data; chown 10001:10001 /rendered /logs/app /vault/data; chmod 0750 /rendered /vault/data; chmod 0755 /logs /logs/app /logs/nginx"]
+    volumes: ["agent-secrets:/rendered", "log-data:/logs", "vault-data:/vault/data"]
+    network_mode: none
+    logging: *logging
+
+  db:
+    image: ${POSTGRES_IMAGE:-postgres:17-bookworm}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: atlasops
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_admin_password
+    secrets: [db_admin_password, db_password]
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sh:/docker-entrypoint-initdb.d/10-atlas.sh:ro
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d atlasops"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 512m
+    logging: *logging
+
+  vault:
+    image: ${VAULT_IMAGE:-hashicorp/vault:2.1.1}
+    user: "10001:10001"
+    entrypoint: ["vault", "server", "-config=/vault/config/server.hcl"]
+    restart: unless-stopped
+    environment: {VAULT_ADDR: "http://127.0.0.1:8200"}
+    volumes:
+      - ./infra/vault/server.hcl:/vault/config/server.hcl:ro
+      - vault-data:/vault/data
+    ports: ["127.0.0.1:8200:8200"]
+    networks: [secrets-net]
+    depends_on:
+      init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+      start_period: 15s
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    logging: *logging
+
+  vault-agent:
+    image: ${VAULT_IMAGE:-hashicorp/vault:2.1.1}
+    user: "10001:10001"
+    entrypoint: ["vault", "agent", "-config=/vault/config/agent.hcl"]
+    restart: unless-stopped
+    volumes:
+      - ./infra/vault/agent.hcl:/vault/config/agent.hcl:ro
+      - agent-secrets:/run/atlasops
+    secrets: [role_id, secret_id]
+    networks: [secrets-net]
+    depends_on:
+      vault: {condition: service_healthy}
+      init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /run/atlasops/api-key"]
+      interval: 5s
+      timeout: 2s
+      retries: 30
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    logging: *logging
+
+  api:
+    build: .
+    image: ${APP_IMAGE:-atlasops-api:local}
+    restart: unless-stopped
+    environment:
+      APP_VERSION: ${APP_VERSION:-local}
+      DB_HOST: db
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      API_KEY_FILE: /run/atlasops/api-key
+      LOG_FILE: /logs/app/api.jsonl
+    secrets: [db_password]
+    volumes: ["agent-secrets:/run/atlasops:ro", "log-data:/logs"]
+    networks: [application, data, telemetry]
+    depends_on:
+      db: {condition: service_healthy}
+      vault-agent: {condition: service_healthy}
+    read_only: true
+    tmpfs: ["/tmp:size=32m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    logging: *logging
+
+  waf:
+    image: ${WAF_IMAGE:-owasp/modsecurity-crs:nginx}
+    restart: unless-stopped
+    environment:
+      BACKEND: http://api:8000
+      PORT: "8080"
+      SERVER_NAME: localhost
+      MODSEC_RULE_ENGINE: "On"
+      BLOCKING_PARANOIA: "1"
+      ANOMALY_INBOUND: "5"
+      MODSEC_AUDIT_ENGINE: RelevantOnly
+      MODSEC_AUDIT_LOG_PARTS: AZ
+      MODSEC_AUDIT_LOG_FORMAT: JSON
+      MODSEC_AUDIT_LOG: /dev/stdout
+      ACCESSLOG: /dev/null
+    networks: [edge, application]
+    depends_on:
+      api: {condition: service_healthy}
+    mem_limit: 256m
+    logging: *logging
+
+  nginx:
+    image: ${NGINX_IMAGE:-nginx:1.30.6-alpine}
+    restart: unless-stopped
+    ports: ["127.0.0.1:8443:8443", "127.0.0.1:8080:8080"]
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./.certs:/etc/nginx/tls:ro
+      - log-data:/logs
+    networks: [edge, telemetry]
+    depends_on:
+      waf: {condition: service_started}
+      init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null --no-check-certificate https://127.0.0.1:8443/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+    mem_limit: 128m
+    logging: *logging
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.13.5}
+    profiles: [monitoring]
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus", "--storage.tsdb.retention.time=7d", "--storage.tsdb.retention.size=1GB"]
+    volumes:
+      - ./infra/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+    networks: [telemetry]
+    mem_limit: 512m
+    logging: *logging
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-grafana/grafana:13.2.4}
+    profiles: [monitoring]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    secrets: [grafana_password]
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:3000:3000"]
+    networks: [telemetry]
+    mem_limit: 384m
+    logging: *logging
+
+  alertmanager:
+    image: ${ALERTMANAGER_IMAGE:-prom/alertmanager:v0.28.1}
+    profiles: [monitoring]
+    restart: unless-stopped
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager"]
+    volumes:
+      - ./infra/alertmanager:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
+    ports: ["127.0.0.1:9093:9093"]
+    networks: [telemetry]
+    mem_limit: 128m
+    logging: *logging
+
+  blackbox:
+    image: ${BLACKBOX_IMAGE:-prom/blackbox-exporter:v0.27.0}
+    profiles: [monitoring]
+    restart: unless-stopped
+    volumes:
+      - ./infra/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+      - ./.certs/server.crt:/etc/blackbox_exporter/ca.crt:ro
+    networks: [telemetry]
+    mem_limit: 64m
+    logging: *logging
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-8.19.24}
+    profiles: [logging]
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+      node.store.allow_mmap: "false"
+      cluster.name: atlasops-lab
+    volumes: ["elastic-data:/usr/share/elasticsearch/data"]
+    ports: ["127.0.0.1:9200:9200"]
+    networks: [logs-net]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' >/dev/null"]
+      interval: 10s
+      timeout: 8s
+      retries: 30
+      start_period: 40s
+    mem_limit: 1536m
+    logging: *logging
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:${ELASTIC_VERSION:-8.19.24}
+    profiles: [logging]
+    restart: unless-stopped
+    environment: {LS_JAVA_OPTS: "-Xms256m -Xmx256m"}
+    volumes:
+      - ./infra/logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./infra/logstash/pipeline.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+      - log-data:/logs:ro
+      - logstash-data:/usr/share/logstash/data
+    networks: [logs-net]
+    depends_on:
+      elasticsearch: {condition: service_healthy}
+    mem_limit: 768m
+    logging: *logging
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION:-8.19.24}
+    profiles: [logging]
+    restart: unless-stopped
+    environment:
+      ELASTICSEARCH_HOSTS: '["http://elasticsearch:9200"]'
+      TELEMETRY_ENABLED: "false"
+      XPACK_SECURITY_ENABLED: "false"
+      NODE_OPTIONS: --max-old-space-size=512
+    ports: ["127.0.0.1:5601:5601"]
+    networks: [logs-net]
+    depends_on:
+      elasticsearch: {condition: service_healthy}
+    mem_limit: 1024m
+    logging: *logging
+
+networks:
+  edge: {}
+  application: {internal: true}
+  data: {internal: true}
+  secrets-net: {internal: true}
+  telemetry: {internal: true}
+  logs-net: {internal: true}
+
+volumes:
+  db-data: {}
+  vault-data: {}
+  agent-secrets: {}
+  log-data: {}
+  prometheus-data: {}
+  grafana-data: {}
+  alertmanager-data: {}
+  elastic-data: {}
+  logstash-data: {}
+
+secrets:
+  db_admin_password: {file: ./.secrets/db-admin-password}
+  db_password: {file: ./.secrets/db-password}
+  grafana_password: {file: ./.secrets/grafana-password}
+  role_id: {file: ./.secrets/role-id}
+  secret_id: {file: ./.secrets/secret-id}

@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: db, namespace: atlasops}
+spec:
+  serviceName: db
+  replicas: 1
+  selector: {matchLabels: {app: db}}
+  template:
+    metadata: {labels: {app: db}}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: db
+          image: postgres:17-bookworm
+          env:
+            - {name: POSTGRES_DB, value: atlasops}
+            - {name: POSTGRES_USER, value: postgres}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: atlasops-db, key: admin-password}}
+          ports: [{containerPort: 5432}]
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: init, mountPath: /docker-entrypoint-initdb.d}
+            - {name: secrets, mountPath: /run/secrets, readOnly: true}
+          readinessProbe:
+            exec: {command: [pg_isready, -U, postgres, -d, atlasops]}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+      volumes:
+        - name: init
+          configMap: {name: db-init}
+        - name: secrets
+          secret:
+            secretName: atlasops-db
+            items: [{key: password, path: db_password}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 1Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: db, namespace: atlasops}
+spec:
+  clusterIP: None
+  selector: {app: db}
+  ports: [{port: 5432, targetPort: 5432}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: api, namespace: atlasops}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector: {matchLabels: {app: api}}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  template:
+    metadata: {labels: {app: api}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001}
+      containers:
+        - name: api
+          image: atlasops-api:local
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          env:
+            - {name: DB_HOST, value: db}
+            - {name: DB_PASSWORD_FILE, value: /run/secrets/db-password}
+            - {name: API_KEY_FILE, value: /run/secrets/api-key}
+            - {name: APP_VERSION, value: kind-lab}
+          ports: [{containerPort: 8000}]
+          volumeMounts:
+            - {name: credentials, mountPath: /run/secrets, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+          startupProbe:
+            httpGet: {path: /health/live, port: 8000}
+            failureThreshold: 30
+            periodSeconds: 3
+          readinessProbe:
+            httpGet: {path: /health/ready, port: 8000}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health/live, port: 8000}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 100m, memory: 96Mi}
+            limits: {cpu: "1", memory: 256Mi}
+      volumes:
+        - name: credentials
+          projected:
+            sources:
+              - secret:
+                  name: atlasops-db
+                  items: [{key: password, path: db-password}]
+              - secret:
+                  name: atlasops-api
+                  items: [{key: api-key, path: api-key}]
+        - name: tmp
+          emptyDir: {medium: Memory, sizeLimit: 32Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: api, namespace: atlasops}
+spec:
+  selector: {app: api}
+  ports: [{port: 8000, targetPort: 8000}]

@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AtlasOps | Operations board</title><link rel="stylesheet" href="/static/style.css"><script defer src="/static/app.js"></script></head>
+<body><main><header><span class="brand">A / ATLASOPS</span><span id="status">Checking service...</span></header>
+<section class="hero"><p class="eyebrow">DEVOPS PORTFOLIO / MOROCCO</p><h1>Ship. Observe.<br>Recover.</h1><p>A small service with an operational story. Track the next deployment, incident drill, or recovery exercise.</p></section>
+<section class="board"><div class="boardhead"><h2>Operations board</h2><span id="count">0 tasks</span></div><form id="auth"><label for="key">Local API key</label><div class="row"><input id="key" type="password" autocomplete="off" placeholder="Paste your generated API key" required><button>Connect</button></div><p class="hint">Held in memory for this tab. Reloading clears it.</p></form>
+<form id="add"><label for="title">Next action</label><div class="row"><input id="title" maxlength="120" placeholder="Verify the restore drill" required><button>Add task</button></div></form><p id="message" role="status"></p><ul id="tasks"></ul></section>
+<footer><span>TLS + WAF</span><span>Vault secrets</span><span>Metrics + logs</span><span>Backup + restore</span></footer></main></body></html>

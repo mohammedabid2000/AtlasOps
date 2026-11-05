@@ -1,0 +1,32 @@
+groups:
+  - name: atlasops
+    rules:
+      - alert: AtlasApiDown
+        expr: up{job="atlasops"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "AtlasOps API cannot be scraped"
+          runbook: "docs/RUNBOOKS.md#api-unavailable"
+      - alert: AtlasHttpsUnavailable
+        expr: probe_success{job="https-probe"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "TLS, WAF, API or database readiness failed"
+          runbook: "docs/RUNBOOKS.md#api-unavailable"
+      - alert: AtlasHighErrorRate
+        expr: sum(rate(atlasops_http_requests_total{route=~"/api/.*",status=~"5.."}[5m])) / clamp_min(sum(rate(atlasops_http_requests_total{route=~"/api/.*"}[5m])), 0.001) > 0.05
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "More than 5 percent of API responses are server errors"}
+      - alert: AtlasHighLatency
+        expr: histogram_quantile(0.95, sum by (le) (rate(atlasops_http_request_duration_seconds_bucket{route=~"/api/.*"}[5m]))) > 0.5
+        for: 3m
+        labels: {severity: warning}
+        annotations: {summary: "API p95 latency is above 500 milliseconds"}
+      - alert: AtlasCertificateExpiring
+        expr: probe_ssl_earliest_cert_expiry{job="https-probe"} - time() < 7 * 86400
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "The lab TLS certificate expires within seven days"}

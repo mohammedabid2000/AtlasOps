@@ -1,0 +1,4 @@
+region = "eu-west-1"
+admin_cidr = "203.0.113.10/32" # Replace with your real public IP.
+ssh_public_key = "ssh-ed25519 REPLACE_WITH_YOUR_PUBLIC_KEY"
+instance_type = "t3.large" # 8 GB; core/monitoring. Use 16 GB if running the full ELK stack.

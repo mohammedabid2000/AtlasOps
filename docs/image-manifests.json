@@ -1,0 +1,76 @@
+{
+  "checked_at": "2026-11-05",
+  "scope": "Registry manifest availability only; not runtime or vulnerability verification",
+  "images": [
+    {
+      "image": "library/python:3.12-slim-bookworm",
+      "status": 200,
+      "digest": "sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337"
+    },
+    {
+      "image": "hashicorp/vault:2.1.1",
+      "status": 200,
+      "digest": "sha256:47f14a6acb98f48d798a07df7c83f23a6e636e1cf724c5f8ff165cb32667a1e2"
+    },
+    {
+      "image": "library/postgres:17-bookworm",
+      "status": 200,
+      "digest": "sha256:839fbb5a4942a7758dd93e18b42ea5649807491a0545b5eeeb8f0b8bb11857a5"
+    },
+    {
+      "image": "library/nginx:1.30.6-alpine",
+      "status": 200,
+      "digest": "sha256:0e52bd054126cdc040b1276c0af347aeb02a41b9cfe305d6094767ac30e97949"
+    },
+    {
+      "image": "owasp/modsecurity-crs:nginx",
+      "status": 200,
+      "digest": "sha256:7698c48a41a43138ae317feeec964d1515b861cc1d9e50617bc1cdfe9f314e1d"
+    },
+    {
+      "image": "prom/prometheus:v3.13.5",
+      "status": 200,
+      "digest": "sha256:aafa9d694e6a883c02db516d9f6e5b84e14195f49a2a6456a4cca815edda72b9"
+    },
+    {
+      "image": "prom/blackbox-exporter:v0.27.0",
+      "status": 200,
+      "digest": "sha256:a50c4c0eda297baa1678cd4dc4712a67fdea713b832d43ce7fcc5f9bea05094d"
+    },
+    {
+      "image": "prom/alertmanager:v0.28.1",
+      "status": 200,
+      "digest": "sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba"
+    },
+    {
+      "image": "grafana/grafana:13.2.4",
+      "status": 200,
+      "digest": "sha256:dbbc38ea21103cefb50396340cd88afec779c7e070b0a7bf5a75b4ce46651d3f"
+    },
+    {
+      "image": "aquasec/trivy:0.76.1",
+      "status": 200,
+      "digest": "sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c"
+    },
+    {
+      "image": "library/busybox:1.37",
+      "status": 200,
+      "digest": "sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec"
+    },
+    {
+      "image": "docker.elastic.co/elasticsearch/elasticsearch:8.19.24",
+      "status": 200,
+      "digest": "sha256:d6dfe6626d645cfec66e91009aca60c6c1bb6f94d34253528f24d8cea2f94ba6"
+    },
+    {
+      "image": "docker.elastic.co/logstash/logstash:8.19.24",
+      "status": 200,
+      "digest": "sha256:0294fb6e516a706cf91c8329e1e8d3fe1bf2d5f2da2af18df32e5c7d23eb96fa"
+    },
+    {
+      "image": "docker.elastic.co/kibana/kibana:8.19.24",
+      "status": 200,
+      "digest": "sha256:c712b5ab0a82d272eff6192edd4ae75b6b07477b3d1b13cabaa2934744727b4d"
+    }
+  ]
+}
